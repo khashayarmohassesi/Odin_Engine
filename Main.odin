@@ -10,6 +10,8 @@ BitmapMemory : rawptr
 BitmapWidth : i32
 BitmapHeight : i32
 BytesPerPixel : i32 = 4
+
+
 @(private="file")
 RenderWeirdGradient :: proc "stdcall" (XOffset : i32, YOffset : i32) {
 	Width := BitmapWidth
@@ -78,14 +80,14 @@ UpdateWindow :: proc "stdcall"(DeviceContext : windows.HDC,
 	WindowWidth := ClientRect.right - ClientRect.left
 	WindowHeight := ClientRect.bottom - ClientRect.top
 	windows.StretchDIBits(DeviceContext,
-	//					  X,
-	//					  Y,
-		//				  Width,
-		//				  Height,
-		//				  X,
-		//				  Y,
-		//				  Width,
-						  //				  Height,
+						  //X,
+						  //Y,
+						  //Width,
+						  //Height,
+						  //X,
+						  //Y,
+						  //Width,
+						  //Height,
 						  0,0, BitmapWidth,BitmapHeight,
 						  0,0, WindowWidth,WindowHeight,
 						  BitmapMemory,
@@ -182,8 +184,17 @@ main :: proc(){
 			//it's all for loop, and I've dropped the increment step and the initial step
 			for ; Running; {
 
-				MessageResult : b32 = cast(b32) windows.PeekMessageW(&Message,nil,0,0, windows.PM_REMOVE)
-				for MessageResult == false  {
+				MessageResult : windows.BOOL =  windows.PeekMessageW(&Message,nil,0,0, windows.PM_REMOVE)
+				//This is wrong
+				//for MessageResult == false  {
+				//This works which I think it means it's returning a bool?
+				//it's returning a BOOL which is coming from windows, but can I if it easily?
+				//this is such a weird issue that I have, if I use the version below it works flawlessly
+				//for windows.PeekMessageW(&Message,nil,0,0, windows.PM_REMOVE) {
+				//but if use the one below it doesn't work at all
+				//I have no clue what's going on, I just use the one that works
+				//for MessageResult == windows.FALSE{
+				for windows.PeekMessageW(&Message,nil,0,0, windows.PM_REMOVE) {
 					if Message.message == windows.WM_QUIT {
 						Running = false
 					}
