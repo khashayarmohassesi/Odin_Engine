@@ -3,33 +3,58 @@ package main
 import "core:fmt"
 import "core:sys/windows"
 import "core:mem"
-//Todo Global for now
 Running : bool
-BitmapInfo : windows.BITMAPINFO
-BitmapMemory : rawptr
-BitmapWidth : i32
-BitmapHeight : i32
-BytesPerPixel : i32 = 4
+
+//Todo Global for now
+
+win_offscreen_buffer :: struct {
+	Info : windows.BITMAPINFO,
+	Memory : rawptr,
+	Width : i32,
+	Height : i32,
+	Pitch : i32,
+	BytesPerPixel : i32
+	
+}
+
+
+GlobalBuffer : win_offscreen_buffer
+
+win_window_dimension :: struct {
+	Width : i32,
+	Height : i32,
+}
+
+GetWindowDimension :: proc "stdcall" (Window : windows.HWND) -> win_window_dimension{
+	Result : win_window_dimension
+
+	ClientRect : windows.RECT
+	windows.GetClientRect(Window,&ClientRect)
+	Result.Width = ClientRect.right - ClientRect.left
+	Result.Height = ClientRect.bottom - ClientRect.top
+
+	return Result
+}
 
 
 @(private="file")
-RenderWeirdGradient :: proc "stdcall" (XOffset : i32, YOffset : i32) {
-	Width := BitmapWidth
-	Height := BitmapHeight
+RenderWeirdGradient :: proc "stdcall" (Buffer : ^win_offscreen_buffer, XOffset : i32, YOffset : i32) {
+
 	
-	Pitch := Width *BytesPerPixel
+	Buffer.Pitch = Buffer.Width * Buffer.BytesPerPixel
+
 
 	//casting from rawptr to char pointer
 	//leaving this comment here to make myself remember the odin syntax
-	Row : ^u8 = cast (^u8) BitmapMemory
+	Row : ^u8 = cast (^u8) Buffer.Memory
 		
-	for Y : i32= 0; Y < BitmapHeight; Y+=1 {
+	for Y : i32= 0; Y < Buffer.Height; Y+=1 {
 		//I'm so not sure about this
 		//I'm trying to cast the Row PTR to a u32 PTR
 		//I'm casting it first and then taking the pointer of it and THEN dereferencing with ^?
 		Pixel : ^u32 = &(cast(^u32) Row)^
 			
-		for X: i32 = 0; X< BitmapWidth; X+=1 {
+		for X: i32 = 0; X< Buffer.Width; X+=1 {
 			Blue : u8 =cast(u8) (X + XOffset)
 			Green : u8 =cast(u8) (Y + YOffset)
 			Pixel^ = cast(u32) (cast(u32)Green <<8) | cast(u32) Blue
@@ -39,46 +64,49 @@ RenderWeirdGradient :: proc "stdcall" (XOffset : i32, YOffset : i32) {
 			
 			Pixel = mem.ptr_offset(Pixel,1)
 		}
-		Row = mem.ptr_offset(Row,Pitch)
+		Row = mem.ptr_offset(Row,Buffer.Pitch)
 	}
 }
 
 @(private="file")
-ResizeDIBSection :: proc "stdcall" ( Width: i32, Height: i32){
+ResizeDIBSection :: proc "stdcall" (Buffer : ^win_offscreen_buffer, Width: i32, Height: i32){
 	//Todo: Bulletproof this
 	//Maybe don't free first, free after, then free first if that fails
-	if BitmapMemory != nil {
-		windows.VirtualFree(BitmapMemory, 0, windows.MEM_RELEASE)
+	if Buffer.Memory != nil {
+		windows.VirtualFree(Buffer.Memory, 0, windows.MEM_RELEASE)
 	}
-	BitmapWidth = Width
-	BitmapHeight = Height
-	BitmapInfo.bmiHeader.biSize = size_of(BitmapInfo.bmiHeader)
-	BitmapInfo.bmiHeader.biWidth = BitmapWidth
-	BitmapInfo.bmiHeader.biHeight = -BitmapHeight
-	BitmapInfo.bmiHeader.biPlanes = 1
-	BitmapInfo.bmiHeader.biBitCount = 32
-	BitmapInfo.bmiHeader.biCompression = windows.BI_RGB
-	BitmapInfo.bmiHeader.biSizeImage = 0
-	BitmapInfo.bmiHeader.biXPelsPerMeter = 0
-	BitmapInfo.bmiHeader.biYPelsPerMeter = 0
-	BitmapInfo.bmiHeader.biClrImportant = 0
+	Buffer.Width = Width
+	Buffer.Height = Height
+	Buffer.BytesPerPixel = 4
 
-	BitmapMemorySize : i32 =  (Width* Height)*BytesPerPixel
-	BitmapMemory = windows.VirtualAlloc(nil, uint (BitmapMemorySize),windows.MEM_COMMIT,windows.PAGE_READWRITE)
+	Buffer.Info.bmiHeader.biSize = size_of(Buffer.Info.bmiHeader)
+	Buffer.Info.bmiHeader.biWidth = Buffer.Width
+	Buffer.Info.bmiHeader.biHeight = -Buffer.Height
+	Buffer.Info.bmiHeader.biPlanes = 1
+	Buffer.Info.bmiHeader.biBitCount = 32
+	Buffer.Info.bmiHeader.biCompression = windows.BI_RGB
+	Buffer.Info.bmiHeader.biSizeImage = 0
+	Buffer.Info.bmiHeader.biXPelsPerMeter = 0
+	Buffer.Info.bmiHeader.biYPelsPerMeter = 0
+	Buffer.Info.bmiHeader.biClrImportant = 0
 
-	RenderWeirdGradient(128,0)
+	BitmapMemorySize : i32 =  (Width* Height)*Buffer.BytesPerPixel
+	Buffer.Memory = windows.VirtualAlloc(nil, uint (BitmapMemorySize),windows.MEM_COMMIT,windows.PAGE_READWRITE)
+
+	RenderWeirdGradient(Buffer,128,0)
 
 }
 @(private="file")
-UpdateWindow :: proc "stdcall"(DeviceContext : windows.HDC,
-							   ClientRect : ^windows.RECT,
-							   X : i32,
-							   Y : i32,
-							   Width: i32,
-							   Height: i32) {
+DisplayBufferToWindow :: proc "stdcall"(DeviceContext : windows.HDC,
+										WindowWidth : i32,
+										WindowHeight : i32,
+										Buffer : ^win_offscreen_buffer,
+										X : i32,
+										Y : i32,
+										Width: i32,
+										Height: i32) {
+	//Todo : Aspect Ratio Correction
 	
-	WindowWidth := ClientRect.right - ClientRect.left
-	WindowHeight := ClientRect.bottom - ClientRect.top
 	windows.StretchDIBits(DeviceContext,
 						  //X,
 						  //Y,
@@ -88,16 +116,16 @@ UpdateWindow :: proc "stdcall"(DeviceContext : windows.HDC,
 						  //Y,
 						  //Width,
 						  //Height,
-						  0,0, BitmapWidth,BitmapHeight,
 						  0,0, WindowWidth,WindowHeight,
-						  BitmapMemory,
-						  &BitmapInfo,
+						  0,0, Buffer.Width,Buffer.Height,
+						  Buffer.Memory,
+						  &Buffer.Info,
 						  windows.DIB_RGB_COLORS,
 						  windows.SRCCOPY)
 }
 
 
-MainWindowCallback :: proc "stdcall"(hwnd : windows.HWND ,
+MainWindowCallback :: proc "stdcall"(WindowHandle : windows.HWND ,
 									 Message: u32,
 									 WPARAM: uintptr ,
 									 LPARAM: int ) -> int {
@@ -106,12 +134,6 @@ MainWindowCallback :: proc "stdcall"(hwnd : windows.HWND ,
 	
 	switch Message {
 	case windows.WM_SIZE : {//Create a buffer and draw a buffer
-		ClientRect : windows.RECT
-		windows.GetClientRect(hwnd,&ClientRect)
-		Width := ClientRect.right - ClientRect.left
-		Height := ClientRect.bottom - ClientRect.top
-		ResizeDIBSection(Width, Height)
-		windows.OutputDebugStringA("WM_Size")
 	}
 	case windows.WM_DESTROY : {
 		//Todo: Handle this as an error - recreate window?
@@ -127,34 +149,31 @@ MainWindowCallback :: proc "stdcall"(hwnd : windows.HWND ,
 	case windows.WM_PAINT: {
 		Paint : windows.PAINTSTRUCT
 		//HDC
-		DeviceContext := windows.BeginPaint(hwnd, &Paint)
+		DeviceContext := windows.BeginPaint(WindowHandle, &Paint)
 		
 		X : i32 = Paint.rcPaint.left
 		Y : i32 = Paint.rcPaint.top
-
-		ClientRect : windows.RECT
-		windows.GetClientRect(hwnd,&ClientRect)
+		Dimension := GetWindowDimension(WindowHandle)
+		DisplayBufferToWindow(DeviceContext,Dimension.Width,Dimension.Height,&GlobalBuffer,
+							  X,Y,Dimension.Width,Dimension.Height)
 		
-		Width : i32 = Paint.rcPaint.right - Paint.rcPaint.left;
-		Height : i32 = Paint.rcPaint.bottom - Paint.rcPaint.top
-		UpdateWindow(DeviceContext,&ClientRect,X,Y,Width,Height)
-		
-		windows.EndPaint(hwnd, &Paint)
+		windows.EndPaint(WindowHandle, &Paint)
 	}
 	case :{
 		//		windows.OutputDebugStringA("default")
-		Result = windows.DefWindowProcA(hwnd,Message,WPARAM,LPARAM)
+		Result = windows.DefWindowProcA(WindowHandle,Message,WPARAM,LPARAM)
 	}
 	}
 	return Result
 }
 
 main :: proc(){
-
-	
-	
 	wnd : windows.WNDCLASSW
-	wnd.style = windows.CS_OWNDC | windows.CS_HREDRAW | windows.CS_VREDRAW
+ 
+
+	ResizeDIBSection(&GlobalBuffer,1280,720)
+
+	wnd.style = windows.CS_HREDRAW | windows.CS_VREDRAW
 	wnd.lpfnWndProc = MainWindowCallback
 	wnd.hInstance = windows.HINSTANCE( windows.GetModuleHandleW(""))
 	//	wnd.hIcon = ;
@@ -177,14 +196,13 @@ main :: proc(){
 			nil)
 		if WindowHandle != nil {
 			Running = true
-			Message : windows.MSG
 			XOffset : i32 = 0
 			YOffset : i32 = 0
 			//it seems there's no while loop in odin
 			//it's all for loop, and I've dropped the increment step and the initial step
 			for ; Running; {
 
-				MessageResult : windows.BOOL =  windows.PeekMessageW(&Message,nil,0,0, windows.PM_REMOVE)
+				Message : windows.MSG
 				//This is wrong
 				//for MessageResult == false  {
 				//This works which I think it means it's returning a bool?
@@ -201,19 +219,18 @@ main :: proc(){
 					windows.TranslateMessage(&Message)
 					windows.DispatchMessageW(&Message)
 				}
-				RenderWeirdGradient(XOffset,YOffset)
+				RenderWeirdGradient(&GlobalBuffer,XOffset,YOffset)
 				
 				{
 					DeviceContext : windows.HDC = windows.GetDC(WindowHandle )
-					ClientRect : windows.RECT
-					windows.GetClientRect(WindowHandle,&ClientRect)
-					WindowWidth : i32 = ClientRect.right - ClientRect.left
-					WindowHeight : i32 = ClientRect.bottom - ClientRect.top
-					UpdateWindow(DeviceContext,&ClientRect,0,0,WindowWidth,WindowHeight)
+					Dimension := GetWindowDimension(WindowHandle)
+					DisplayBufferToWindow(DeviceContext,Dimension.Width, Dimension.Height,
+										  &GlobalBuffer,0,0,Dimension.Width,Dimension.Height)
 					windows.ReleaseDC(WindowHandle,DeviceContext)
 				}
 				
 				XOffset +=1
+				YOffset +=2
 			}
 			
 		}
